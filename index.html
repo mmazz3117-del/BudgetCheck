@@ -51,7 +51,7 @@
     background: var(--bg);
     color: var(--text);
     transition: background 0.3s, color 0.3s;
-    padding-bottom: calc(96px + env(safe-area-inset-bottom));
+    padding-bottom: calc(140px + env(safe-area-inset-bottom));
   }
   .wrap { max-width: 520px; margin: 0 auto; padding: 0 16px; }
 
@@ -394,7 +394,7 @@
   <div class="section-title">Bills &amp; Expenses <button class="add-link" data-add="Expense">+ Add</button></div>
   <div class="card" id="expenseList"></div>
 
-  <button class="reset-btn" id="resetBtn">Start New Month</button>
+  <button class="reset-btn" id="resetBtn">Complete This Month</button>
   <div class="footer-note">Tap a row to check it off · Tap ··· to edit · Tap a balance to update it</div>
 
   </div><!-- /viewHome -->
@@ -407,7 +407,7 @@
     <div id="monthsHistory"></div>
     <div class="section-title">Upcoming</div>
     <div id="monthsUpcoming"></div>
-    <div class="footer-note">Past months are saved when you tap “Start New Month.” Tap a month to see its details.</div>
+    <div class="footer-note">Past months are saved when you complete a month. Tap a month to see its details.</div>
   </div>
 
   <div class="made-by">
@@ -469,8 +469,10 @@
      1.5  Balloons float up on month completion 🎈
      1.6  Double warning before Start New Month clears checkmarks
      1.7  Smart warnings: double only for in-progress months
+     1.8  Footer visible above tab bar; $0 credit card payment asks for amount
+     1.9  $0 bills optional; "Complete This Month"; auto-advance after balloons
      ═══════════════════════════════════════════════ */
-  const APP_VERSION = "1.7";
+  const APP_VERSION = "1.9";
 
   const STORE_KEY = "billcheck-state-v1";
   const fmt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
@@ -582,10 +584,11 @@
     remainEl.textContent = money(remain);
     remainEl.className = "val " + (remain < 0 ? "red" : "");
 
-    // Progress
-    const doneCount = bills.filter(i => i.done).length;
-    const pct = bills.length ? Math.round((doneCount / bills.length) * 100) : 0;
-    $("progText").textContent = doneCount + " of " + bills.length + " bills paid";
+    // Progress — only bills with an amount are required; $0 items are optional
+    const requiredBills = bills.filter(i => i.amount > 0);
+    const requiredDone = requiredBills.filter(i => i.done).length;
+    const pct = requiredBills.length ? Math.round((requiredDone / requiredBills.length) * 100) : 0;
+    $("progText").textContent = requiredDone + " of " + requiredBills.length + " bills paid";
     $("progPct").textContent = pct + "%";
     $("progFill").style.width = pct + "%";
 
@@ -600,12 +603,20 @@
       np.style.display = "none";
     }
 
-    // Done banner + confetti
-    const allDone = bills.length > 0 && doneCount === bills.length;
+    // Done banner + confetti — complete when every REQUIRED bill is paid
+    const allDone = requiredBills.length > 0 && requiredDone === requiredBills.length;
     $("doneBanner").classList.toggle("show", allDone);
     if (allDone && !state.celebrated) {
       state.celebrated = true;
       celebrate();
+      // After the balloons, offer to roll into the next month automatically
+      setTimeout(() => {
+        const req = state.items.filter(i => i.type === "Expense" && i.amount > 0);
+        const stillDone = req.length > 0 && req.every(i => i.done);
+        if (stillDone && confirm("🎉 " + state.month + " is complete!\n\nStart " + monthAfter(state.month, 1) + " now? This month is saved to your Months history, and everything stays editable in the new month.")) {
+          completeMonth();
+        }
+      }, 3800);
     }
     if (!allDone) state.celebrated = false;
 
@@ -647,15 +658,16 @@
   function snapshotCurrent() {
     const income = state.items.filter(i => i.type === "Income");
     const bills = state.items.filter(i => i.type === "Expense");
-    const doneCount = bills.filter(i => i.done).length;
+    const required = bills.filter(i => i.amount > 0);
+    const doneCount = required.filter(i => i.done).length;
     return {
       month: state.month,
       savedAt: Date.now(),
       incomeReceived: income.filter(i => i.done).reduce((s, i) => s + i.amount, 0),
       billsPaid: bills.filter(i => i.done).reduce((s, i) => s + i.amount, 0),
       leftUnpaid: bills.filter(i => !i.done).reduce((s, i) => s + i.amount, 0),
-      doneCount, totalBills: bills.length,
-      complete: bills.length > 0 && doneCount === bills.length,
+      doneCount, totalBills: required.length,
+      complete: required.length > 0 && doneCount === required.length,
       items: state.items.map(i => ({ type: i.type, name: i.name, amount: i.amount, done: i.done }))
     };
   }
@@ -711,17 +723,18 @@
 
     // Current
     const cur = $("monthsCurrent"); cur.innerHTML = "";
-    const doneCount = bills.filter(i => i.done).length;
+    const required = bills.filter(i => i.amount > 0);
+    const doneCount = required.filter(i => i.done).length;
     const incomeIn = income.filter(i => i.done).reduce((s, i) => s + i.amount, 0);
     const paid = bills.filter(i => i.done).reduce((s, i) => s + i.amount, 0);
     cur.appendChild(monthCard({
       name: state.month,
-      badge: doneCount === bills.length && bills.length ? "Complete" : "In progress",
-      badgeClass: doneCount === bills.length && bills.length ? "complete" : "current",
+      badge: doneCount === required.length && required.length ? "Complete" : "In progress",
+      badgeClass: doneCount === required.length && required.length ? "complete" : "current",
       stats: [
         { lbl: "Income", val: money(incomeIn), cls: "green" },
         { lbl: "Paid", val: money(paid) },
-        { lbl: "Bills", val: doneCount + "/" + bills.length }
+        { lbl: "Bills", val: doneCount + "/" + required.length }
       ],
       hint: "Tap to open this month’s checklist",
       onTap: () => switchTab("home")
@@ -732,7 +745,7 @@
     if (!state.history.length) {
       const e = document.createElement("div");
       e.className = "months-empty";
-      e.textContent = "No past months yet. When you tap “Start New Month,” this month gets saved here with everything you checked off.";
+      e.textContent = "No past months yet. When you complete a month, it gets saved here with everything you checked off.";
       hist.appendChild(e);
     } else {
       [...state.history].reverse().forEach(h => {
@@ -791,7 +804,9 @@
       return;
     }
     items.forEach(item => {
-      const sub = item.note || (item.creditCard ? "Pays down Credit Card balance" : "");
+      const sub = item.note
+        || (item.creditCard ? "Pays down Credit Card balance" : "")
+        || (item.type === "Expense" && item.amount === 0 ? "Optional — no amount this month" : "");
       const row = document.createElement("div");
       row.className = "row" + (item.done ? " done" : "");
       row.innerHTML =
@@ -804,6 +819,12 @@
       row.querySelector(".amt").textContent = (isIncome ? "+" : "−") + money(item.amount).replace("$", "$");
       row.addEventListener("click", (e) => {
         if (e.target.closest(".edit-dot")) { openItemSheet(item.id); return; }
+        // Credit card payments change month to month — if it's still $0, ask now
+        if (item.type === "Expense" && item.creditCard && !item.done && item.amount === 0) {
+          const v = prompt("How much are you paying toward the credit card this month?");
+          if (v === null) return; // cancelled — leave unchecked
+          item.amount = parseAmt(v);
+        }
         item.done = !item.done;
         if (item.type === "Expense" && item.creditCard) {
           if (item.done) {
@@ -981,24 +1002,8 @@
     saveState(); render();
   });
 
-  $("resetBtn").addEventListener("click", () => {
-    const bills = state.items.filter(i => i.type === "Expense");
-    const checkedCount = state.items.filter(i => i.done).length;
-    const billsDone = bills.filter(i => i.done).length;
-    const isComplete = bills.length > 0 && billsDone === bills.length;
-    const nextMonth = monthAfter(state.month, 1);
-
-    if (isComplete) {
-      // Month is finished — one friendly confirmation, no scary warnings
-      if (!confirm("🎉 " + state.month + " is complete!\n\nStart " + nextMonth + "? This month is saved to your Months history.")) return;
-    } else if (checkedCount > 0) {
-      // Month still in progress — double warning before clearing work
-      if (!confirm("⚠️ " + state.month + " isn't finished yet.\n\nStarting a new month will CLEAR the " + checkedCount + " item(s) you've already checked off. Your bills, amounts, and balances stay, and this month will be saved to your Months history as-is.")) return;
-      if (!confirm("⚠️ Are you absolutely sure?\n\nYour progress for " + state.month + " will be cleared and this can't be undone. Tap OK to start the new month.")) return;
-    } else {
-      // Nothing checked yet — nothing to lose
-      if (!confirm("Start " + nextMonth + "? Nothing has been checked off for " + state.month + " yet, so there's nothing to clear.")) return;
-    }
+  /* ── Completing a month (shared by the button and the auto-advance) ── */
+  function completeMonth() {
     // Archive this month (replace if it was already saved once)
     const snap = snapshotCurrent();
     snap.auto = false;
@@ -1012,7 +1017,28 @@
     state.month = (parseMonth(now).y * 12 + parseMonth(now).m) > (parseMonth(next).y * 12 + parseMonth(next).m) ? now : next;
     state.celebrated = false;
     saveState(); render();
+    switchTab("home");
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  $("resetBtn").addEventListener("click", () => {
+    const required = state.items.filter(i => i.type === "Expense" && i.amount > 0);
+    const checkedCount = state.items.filter(i => i.done).length;
+    const isComplete = required.length > 0 && required.every(i => i.done);
+    const nextMonth = monthAfter(state.month, 1);
+
+    if (isComplete) {
+      // Month is finished — one friendly confirmation, no scary warnings
+      if (!confirm("🎉 " + state.month + " is complete!\n\nStart " + nextMonth + "? This month is saved to your Months history, and everything stays editable in the new month.")) return;
+    } else if (checkedCount > 0) {
+      // Month still in progress — double warning before clearing work
+      if (!confirm("⚠️ " + state.month + " isn't finished yet.\n\nCompleting the month now will CLEAR the " + checkedCount + " item(s) you've already checked off. Your bills, amounts, and balances stay, and this month will be saved to your Months history as-is.")) return;
+      if (!confirm("⚠️ Are you absolutely sure?\n\nYour progress for " + state.month + " will be cleared and this can't be undone. Tap OK to start " + nextMonth + ".")) return;
+    } else {
+      // Nothing checked yet — nothing to lose
+      if (!confirm("Start " + nextMonth + "? Nothing has been checked off for " + state.month + " yet, so there's nothing to clear.")) return;
+    }
+    completeMonth();
   });
 
   document.querySelectorAll(".add-link").forEach(btn => {
