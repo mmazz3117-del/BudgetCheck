@@ -278,6 +278,15 @@
   .mc-item.undone .mi-name { color: var(--text2); }
   .mc-item .mi-amt { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--text2); }
   .mc-hint { font-size: 12px; color: var(--text3); margin-top: 10px; text-align: center; }
+  .restore-btn {
+    display: block; width: 100%; margin-top: 12px;
+    background: var(--card2); color: var(--blue);
+    border: none; border-radius: 12px; padding: 12px;
+    font-size: 15px; font-weight: 600; cursor: pointer; font-family: inherit;
+    transition: transform 0.1s;
+  }
+  body.dark .restore-btn { background: #2C2C2E; }
+  .restore-btn:active { transform: scale(0.98); }
   .months-empty {
     text-align: center; padding: 26px 20px; color: var(--text2); font-size: 14px;
     background: var(--card); border-radius: 16px; margin-top: 12px; box-shadow: var(--shadow);
@@ -473,8 +482,9 @@
      1.8  Footer visible above tab bar; $0 credit card payment asks for amount
      1.9  $0 bills optional; "Complete This Month"; auto-advance after balloons
      2.0  Fixed footer/version hidden behind tab bar
+     2.1  Restore a past month from the Months page
      ═══════════════════════════════════════════════ */
-  const APP_VERSION = "2.0";
+  const APP_VERSION = "2.1";
 
   const STORE_KEY = "billcheck-state-v1";
   const fmt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
@@ -706,6 +716,13 @@
         r.querySelector(".mi-amt").textContent = money(it.amount);
         det.appendChild(r);
       });
+      if (opts.onRestore) {
+        const rb = document.createElement("button");
+        rb.className = "restore-btn";
+        rb.textContent = "↩︎ Restore This Month";
+        rb.addEventListener("click", (e) => { e.stopPropagation(); opts.onRestore(); });
+        det.appendChild(rb);
+      }
       card.appendChild(det);
       card.addEventListener("click", () => card.classList.toggle("expanded"));
     } else if (opts.onTap) {
@@ -760,7 +777,8 @@
             { lbl: "Paid", val: money(h.billsPaid) },
             { lbl: "Unpaid", val: money(h.leftUnpaid), cls: h.leftUnpaid > 0 ? "red" : "" }
           ],
-          items: h.items
+          items: h.items,
+          onRestore: () => restoreMonth(h.month)
         }));
       });
     }
@@ -1005,6 +1023,34 @@
   });
 
   /* ── Completing a month (shared by the button and the auto-advance) ── */
+  function restoreMonth(monthLabel) {
+    const h = state.history.find(x => x.month === monthLabel);
+    if (!h) return;
+    if (!confirm("↩︎ Restore " + h.month + "?\n\nIt will become your current month again with all its checkmarks, replacing " + state.month + "'s progress. Balances are not changed.")) return;
+    // Bring the snapshot back: match items by type + name
+    state.items.forEach(i => {
+      const snap = h.items.find(s => s.type === i.type && s.name === i.name);
+      if (snap) {
+        i.done = snap.done;
+        i.amount = snap.amount;
+        // Checked credit-card payments were already deducted before the month
+        // completed, so mark them applied — unchecking will refund correctly.
+        i.applied = (i.done && i.type === "Expense" && i.creditCard) ? i.amount : null;
+      } else {
+        i.done = false;
+        i.applied = null;
+      }
+    });
+    state.month = h.month;
+    // Prevent the celebration + auto-advance from instantly re-firing
+    state.celebrated = true;
+    // It's the current month again, so remove it from history
+    state.history = state.history.filter(x => x.month !== h.month);
+    saveState(); render();
+    switchTab("home");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   function completeMonth() {
     // Archive this month (replace if it was already saved once)
     const snap = snapshotCurrent();
