@@ -45,7 +45,8 @@
     --shadow: none;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { height: 100%; }
+  html { height: 100%; }
+  body { min-height: 100%; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     background: var(--bg);
@@ -471,8 +472,9 @@
      1.7  Smart warnings: double only for in-progress months
      1.8  Footer visible above tab bar; $0 credit card payment asks for amount
      1.9  $0 bills optional; "Complete This Month"; auto-advance after balloons
+     2.0  Fixed footer/version hidden behind tab bar
      ═══════════════════════════════════════════════ */
-  const APP_VERSION = "1.9";
+  const APP_VERSION = "2.0";
 
   const STORE_KEY = "billcheck-state-v1";
   const fmt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
