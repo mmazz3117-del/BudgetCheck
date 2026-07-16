@@ -182,6 +182,11 @@
   }
   .reset-btn:active { transform: scale(0.98); }
   .footer-note { text-align: center; font-size: 12px; color: var(--text3); margin-top: 14px; }
+  .made-by {
+    text-align: center; font-size: 12.5px; font-weight: 500;
+    color: var(--text2); margin-top: 30px;
+  }
+  .made-by .ver { font-size: 11px; color: var(--text3); margin-top: 3px; font-variant-numeric: tabular-nums; }
 
   /* ── Sheet (modal) ── */
   .overlay {
@@ -208,6 +213,13 @@
   }
   body.dark .field input, body.dark .field select { background: #2C2C2E; }
   .field input:focus { box-shadow: 0 0 0 2px var(--blue); }
+  .cc-row {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--card2); border-radius: 12px; padding: 13px 14px;
+    font-size: 15px; font-weight: 500; cursor: pointer; user-select: none; -webkit-user-select: none;
+  }
+  body.dark .cc-row { background: #2C2C2E; }
+  .cc-row input { width: 20px; height: 20px; accent-color: var(--green); flex-shrink: 0; }
   .sheet-btns { display: flex; gap: 10px; margin-top: 6px; }
   .btn {
     flex: 1; border: none; border-radius: 13px; padding: 14px;
@@ -271,7 +283,7 @@
     line-height: 1.5;
   }
 
-  /* ── Confetti ── */
+  /* ── Confetti & balloons ── */
   .confetti {
     position: fixed; top: -12px; z-index: 100; pointer-events: none;
     width: 9px; height: 14px; border-radius: 2px;
@@ -279,6 +291,18 @@
   }
   @keyframes fall {
     to { transform: translateY(110vh) rotate(720deg); opacity: 0.6; }
+  }
+  .balloon {
+    position: fixed; bottom: -70px; z-index: 100; pointer-events: none;
+    font-size: 36px; animation: floatUp ease-in forwards;
+    will-change: transform;
+  }
+  @keyframes floatUp {
+    0%   { transform: translateY(0) translateX(0) rotate(-3deg); opacity: 1; }
+    25%  { transform: translateY(-30vh) translateX(16px) rotate(4deg); }
+    50%  { transform: translateY(-58vh) translateX(-12px) rotate(-4deg); }
+    75%  { transform: translateY(-86vh) translateX(14px) rotate(3deg); opacity: 1; }
+    100% { transform: translateY(-118vh) translateX(-8px) rotate(-2deg); opacity: 0.7; }
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -386,6 +410,11 @@
     <div class="footer-note">Past months are saved when you tap “Start New Month.” Tap a month to see its details.</div>
   </div>
 
+  <div class="made-by">
+    Designed with ❤️ in Providence
+    <div class="ver" id="verLabel"></div>
+  </div>
+
 </div><!-- /wrap -->
 
 <!-- Tab bar -->
@@ -417,6 +446,9 @@
     <label for="inpNote">Note (optional)</label>
     <input id="inpNote" type="text" placeholder="e.g. due on the 15th" autocomplete="off">
   </div>
+  <div class="field" id="fieldCC">
+    <label class="cc-row"><input type="checkbox" id="inpCC"> Deducts from Credit Card balance when checked</label>
+  </div>
   <div class="sheet-btns">
     <button class="btn danger" id="btnDelete">Delete</button>
     <button class="btn primary" id="btnSave">Save</button>
@@ -426,6 +458,19 @@
 <script>
 (function () {
   "use strict";
+
+  /* ═══════════════════════════════════════════════
+     BillCheck version — bump this after each update
+     1.0  First release (checklist, dark mode, reset)
+     1.1  GitHub/localStorage version + app icons
+     1.2  Months page (history + upcoming)
+     1.3  Credit card deduction + auto-save complete months
+     1.4  Footer credit + version label
+     1.5  Balloons float up on month completion 🎈
+     1.6  Double warning before Start New Month clears checkmarks
+     1.7  Smart warnings: double only for in-progress months
+     ═══════════════════════════════════════════════ */
+  const APP_VERSION = "1.7";
 
   const STORE_KEY = "billcheck-state-v1";
   const fmt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
@@ -457,7 +502,7 @@
       { id: uid(), type: "Expense", name: "Groceries",              amount: 500,    done: false, note: "" },
       { id: uid(), type: "Expense", name: "Gas",                    amount: 150,    done: false, note: "" },
       { id: uid(), type: "Expense", name: "Car Insurance Set-Aside",amount: 83,     done: false, note: "" },
-      { id: uid(), type: "Expense", name: "Credit Card Payment",    amount: 0,      done: false, note: "" },
+      { id: uid(), type: "Expense", name: "Credit Card Payment",    amount: 0,      done: false, note: "", creditCard: true },
       { id: uid(), type: "Expense", name: "Other",                  amount: 0,      done: false, note: "" }
     ]
   });
@@ -486,6 +531,10 @@
         const parsed = JSON.parse(raw);
         if (parsed && Array.isArray(parsed.items)) state = parsed;
         if (!Array.isArray(state.history)) state.history = [];
+        // Backfill: flag existing "Credit Card Payment" rows saved by older versions
+        state.items.forEach(i => {
+          if (i.creditCard === undefined && i.type === "Expense" && /credit\s*card/i.test(i.name)) i.creditCard = true;
+        });
       }
     } catch (e) { /* corrupted or unavailable storage — start fresh */ }
   }
@@ -556,9 +605,23 @@
     $("doneBanner").classList.toggle("show", allDone);
     if (allDone && !state.celebrated) {
       state.celebrated = true;
-      confetti();
+      celebrate();
     }
     if (!allDone) state.celebrated = false;
+
+    // Auto-save: the moment every bill is checked, record this month as Complete
+    // on the Months page. If something gets unchecked, the auto entry is removed.
+    const hadAuto = state.history.some(h => h.month === state.month && h.auto);
+    if (allDone) {
+      const snap = snapshotCurrent();
+      snap.auto = true;
+      state.history = state.history.filter(h => h.month !== state.month);
+      state.history.push(snap);
+      saveState();
+    } else if (hadAuto) {
+      state.history = state.history.filter(h => !(h.month === state.month && h.auto));
+      saveState();
+    }
 
     renderList("incomeList", income, true);
     renderList("expenseList", bills, false);
@@ -728,19 +791,29 @@
       return;
     }
     items.forEach(item => {
+      const sub = item.note || (item.creditCard ? "Pays down Credit Card balance" : "");
       const row = document.createElement("div");
       row.className = "row" + (item.done ? " done" : "");
       row.innerHTML =
         '<div class="checkbox">' + checkSVG + '</div>' +
-        '<div class="info"><div class="name"></div>' + (item.note ? '<div class="note"></div>' : '') + '</div>' +
+        '<div class="info"><div class="name"></div>' + (sub ? '<div class="note"></div>' : '') + '</div>' +
         '<div class="amt ' + (isIncome ? "income" : "") + '"></div>' +
         '<div class="edit-dot" role="button" aria-label="Edit">···</div>';
       row.querySelector(".name").textContent = item.name;
-      if (item.note) row.querySelector(".note").textContent = item.note;
+      if (sub) row.querySelector(".note").textContent = sub;
       row.querySelector(".amt").textContent = (isIncome ? "+" : "−") + money(item.amount).replace("$", "$");
       row.addEventListener("click", (e) => {
         if (e.target.closest(".edit-dot")) { openItemSheet(item.id); return; }
         item.done = !item.done;
+        if (item.type === "Expense" && item.creditCard) {
+          if (item.done) {
+            state.balances.credit = r2(state.balances.credit - item.amount);
+            item.applied = item.amount;
+          } else {
+            state.balances.credit = r2(state.balances.credit + (item.applied != null ? item.applied : item.amount));
+            item.applied = null;
+          }
+        }
         if (navigator.vibrate) navigator.vibrate(8);
         saveState(); render();
       });
@@ -748,9 +821,16 @@
     });
   }
 
-  /* ── Confetti ── */
+  /* ── Confetti & balloons ── */
+  const reducedMotion = () => window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  function celebrate() {
+    confetti();
+    balloons();
+  }
+
   function confetti() {
-    if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (reducedMotion()) return;
     const colors = ["#34C759", "#007AFF", "#FF9500", "#FF3B30", "#AF52DE", "#FFD60A"];
     for (let i = 0; i < 90; i++) {
       const c = document.createElement("div");
@@ -762,6 +842,24 @@
       c.style.transform = "rotate(" + Math.random() * 360 + "deg)";
       document.body.appendChild(c);
       setTimeout(() => c.remove(), 5000);
+    }
+  }
+
+  function balloons() {
+    if (reducedMotion()) return;
+    // hue-rotate turns the red 🎈 into a rainbow of balloon colors
+    const hues = [0, 40, 90, 140, 200, 260, 310];
+    for (let i = 0; i < 12; i++) {
+      const b = document.createElement("div");
+      b.className = "balloon";
+      b.textContent = "🎈";
+      b.style.left = 4 + Math.random() * 88 + "vw";
+      b.style.fontSize = 28 + Math.random() * 18 + "px";
+      b.style.filter = "hue-rotate(" + hues[Math.floor(Math.random() * hues.length)] + "deg)";
+      b.style.animationDuration = 3.2 + Math.random() * 2.4 + "s";
+      b.style.animationDelay = Math.random() * 1.2 + "s";
+      document.body.appendChild(b);
+      setTimeout(() => b.remove(), 7500);
     }
   }
 
@@ -778,6 +876,8 @@
     $("sheetTitle").textContent = "Edit " + (item.type === "Income" ? "income" : "bill");
     $("fieldName").style.display = "";
     $("fieldNote").style.display = "";
+    $("fieldCC").style.display = item.type === "Expense" ? "" : "none";
+    $("inpCC").checked = !!item.creditCard;
     $("lblAmt").textContent = "Amount";
     $("inpName").value = item.name;
     $("inpAmt").value = item.amount ? String(item.amount) : "";
@@ -791,6 +891,8 @@
     $("sheetTitle").textContent = type === "Income" ? "Add income" : "Add bill";
     $("fieldName").style.display = "";
     $("fieldNote").style.display = "";
+    $("fieldCC").style.display = type === "Expense" ? "" : "none";
+    $("inpCC").checked = false;
     $("lblAmt").textContent = "Amount";
     $("inpName").value = "";
     $("inpAmt").value = "";
@@ -806,6 +908,7 @@
     $("sheetTitle").textContent = balLabels[key];
     $("fieldName").style.display = "none";
     $("fieldNote").style.display = "none";
+    $("fieldCC").style.display = "none";
     $("lblAmt").textContent = "Balance";
     $("inpAmt").value = state.balances[key] ? String(state.balances[key]) : "";
     $("btnDelete").style.display = "none";
@@ -817,20 +920,39 @@
     const n = parseFloat(String(v).replace(/[^0-9.\-]/g, ""));
     return isNaN(n) ? 0 : Math.round(n * 100) / 100;
   }
+  const r2 = (n) => Math.round((n || 0) * 100) / 100;
 
   $("btnSave").addEventListener("click", () => {
     if (!sheetMode) return;
     if (sheetMode.kind === "item") {
       const item = state.items.find(i => i.id === sheetMode.id);
       if (item) {
+        const wasCC = item.type === "Expense" && !!item.creditCard;
+        const oldApplied = item.applied != null ? item.applied : item.amount;
         item.name = $("inpName").value.trim() || item.name;
         item.amount = parseAmt($("inpAmt").value);
         item.note = $("inpNote").value.trim();
+        if (item.type === "Expense") item.creditCard = $("inpCC").checked;
+        // Keep the Credit Card balance consistent if this item is already checked
+        if (item.done) {
+          if (wasCC) state.balances.credit = r2(state.balances.credit + oldApplied); // undo old deduction
+          if (item.type === "Expense" && item.creditCard) {
+            state.balances.credit = r2(state.balances.credit - item.amount);         // apply new deduction
+            item.applied = item.amount;
+          } else {
+            item.applied = null;
+          }
+        }
       }
     } else if (sheetMode.kind === "new") {
       const name = $("inpName").value.trim();
       if (name) {
-        state.items.push({ id: uid(), type: sheetMode.type, name, amount: parseAmt($("inpAmt").value), done: false, note: $("inpNote").value.trim() });
+        state.items.push({
+          id: uid(), type: sheetMode.type, name,
+          amount: parseAmt($("inpAmt").value), done: false,
+          note: $("inpNote").value.trim(),
+          creditCard: sheetMode.type === "Expense" && $("inpCC").checked
+        });
       }
     } else if (sheetMode.kind === "bal") {
       state.balances[sheetMode.key] = parseAmt($("inpAmt").value);
@@ -840,6 +962,11 @@
 
   $("btnDelete").addEventListener("click", () => {
     if (sheetMode && sheetMode.kind === "item") {
+      const item = state.items.find(i => i.id === sheetMode.id);
+      // Refund the Credit Card balance if deleting a checked credit-card payment
+      if (item && item.done && item.type === "Expense" && item.creditCard) {
+        state.balances.credit = r2(state.balances.credit + (item.applied != null ? item.applied : item.amount));
+      }
       state.items = state.items.filter(i => i.id !== sheetMode.id);
       saveState(); render();
     }
@@ -855,14 +982,31 @@
   });
 
   $("resetBtn").addEventListener("click", () => {
-    if (!confirm("Start a new month? This month will be saved to your Months history, and all checkmarks will be cleared. Your bills, amounts, and balances stay.")) return;
+    const bills = state.items.filter(i => i.type === "Expense");
+    const checkedCount = state.items.filter(i => i.done).length;
+    const billsDone = bills.filter(i => i.done).length;
+    const isComplete = bills.length > 0 && billsDone === bills.length;
+    const nextMonth = monthAfter(state.month, 1);
+
+    if (isComplete) {
+      // Month is finished — one friendly confirmation, no scary warnings
+      if (!confirm("🎉 " + state.month + " is complete!\n\nStart " + nextMonth + "? This month is saved to your Months history.")) return;
+    } else if (checkedCount > 0) {
+      // Month still in progress — double warning before clearing work
+      if (!confirm("⚠️ " + state.month + " isn't finished yet.\n\nStarting a new month will CLEAR the " + checkedCount + " item(s) you've already checked off. Your bills, amounts, and balances stay, and this month will be saved to your Months history as-is.")) return;
+      if (!confirm("⚠️ Are you absolutely sure?\n\nYour progress for " + state.month + " will be cleared and this can't be undone. Tap OK to start the new month.")) return;
+    } else {
+      // Nothing checked yet — nothing to lose
+      if (!confirm("Start " + nextMonth + "? Nothing has been checked off for " + state.month + " yet, so there's nothing to clear.")) return;
+    }
     // Archive this month (replace if it was already saved once)
     const snap = snapshotCurrent();
+    snap.auto = false;
     state.history = state.history.filter(h => h.month !== snap.month);
     state.history.push(snap);
     if (state.history.length > 24) state.history = state.history.slice(-24);
-    // Reset for the new month
-    state.items.forEach(i => { i.done = false; });
+    // Reset for the new month (credit card deductions stay — those payments happened)
+    state.items.forEach(i => { i.done = false; i.applied = null; });
     const next = monthAfter(state.month, 1);
     const now = monthName();
     state.month = (parseMonth(now).y * 12 + parseMonth(now).m) > (parseMonth(next).y * 12 + parseMonth(next).m) ? now : next;
@@ -881,6 +1025,7 @@
 
   /* ── Boot ── */
   (async function init() {
+    $("verLabel").textContent = "Version " + APP_VERSION;
     await loadState();
     render();
   })();
