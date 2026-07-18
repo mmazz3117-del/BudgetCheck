@@ -167,11 +167,13 @@
   .row .note { font-size: 12px; color: var(--text2); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .row .amt { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.3px; }
   .row .due-col {
-    width: 42px; flex-shrink: 0; text-align: right;
-    font-size: 13px; font-weight: 600; color: var(--text2);
-    font-variant-numeric: tabular-nums;
+    width: 48px; flex-shrink: 0; text-align: right;
+    font-size: 15px; font-weight: 700; color: var(--blue);
+    font-variant-numeric: tabular-nums; letter-spacing: -0.2px;
   }
   .row.done .due-col { color: var(--text3); }
+  .row .due-col { padding: 8px 0; cursor: pointer; }
+  .row .due-col.add { color: var(--text3); font-weight: 400; font-size: 15px; }
   .row.done .amt { color: var(--text3); }
   .row .amt.income { color: var(--green); }
   .row.done .amt.income { color: var(--text3); }
@@ -252,6 +254,30 @@
   .btn:active { transform: scale(0.97); }
   .btn.primary { background: var(--blue); color: #fff; }
   .btn.danger { background: transparent; color: var(--red); flex: 0 0 auto; padding: 14px 18px; }
+
+  /* ── Sort control ── */
+  .seg {
+    display: flex; gap: 2px; background: rgba(118,118,128,0.12);
+    border-radius: 10px; padding: 2px; margin-top: 10px;
+  }
+  body.dark .seg { background: rgba(118,118,128,0.24); }
+  .seg button {
+    flex: 1; border: none; background: none; cursor: pointer;
+    padding: 7px 0; border-radius: 8px; font-family: inherit;
+    font-size: 13px; font-weight: 600;
+    opacity: 0.6; transition: background 0.15s, opacity 0.15s;
+  }
+  .seg button[data-sort="date"] { color: var(--blue); }
+  .seg button[data-sort="name"] { color: var(--green); }
+  .seg button[data-sort="amount"] { color: var(--orange); }
+  .seg button.active { opacity: 1; background: var(--card); box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  body.dark .seg button.active { background: #48484A; }
+  .seg-label {
+    font-size: 12px; font-weight: 600; color: var(--text2);
+    text-transform: uppercase; letter-spacing: 0.5px;
+    margin: 12px 4px 0;
+  }
+  .seg { margin-top: 6px; }
 
   /* ── Tab bar ── */
   .tabbar {
@@ -424,6 +450,12 @@
 
   <!-- Bills -->
   <div class="section-title">Bills &amp; Expenses <button class="add-link" data-add="Expense">+ Add</button></div>
+  <div class="seg-label">Sort by</div>
+  <div class="seg" id="sortSeg">
+    <button data-sort="date">Date</button>
+    <button data-sort="name">Name</button>
+    <button data-sort="amount">Amount</button>
+  </div>
   <div class="card" id="expenseList"></div>
 
   <button class="reset-btn" id="resetBtn">Complete This Month</button>
@@ -470,12 +502,12 @@
     <label for="inpName">Name</label>
     <input id="inpName" type="text" autocomplete="off">
   </div>
-  <div class="field">
+  <div class="field" id="fieldAmt">
     <label for="inpAmt" id="lblAmt">Amount</label>
     <input id="inpAmt" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off">
   </div>
   <div class="field" id="fieldDue">
-    <label>Due day of month (optional) — tap to pick</label>
+    <label>Day of month (optional) — tap to pick</label>
     <div class="day-grid" id="dayGrid"></div>
     <button class="day-clear" id="dayClear" type="button">No due date</button>
   </div>
@@ -512,8 +544,13 @@
      2.1  Restore a past month from the Months page
      2.2  Due dates on bills, sorted start to end of month
      2.3  Due date column + tap-to-pick calendar grid
+     2.4  Date column for paychecks too; both lists sort by day
+     2.5  Tap the date column for a date-only calendar picker
+     2.6  Sort bills & income by date, name, or amount
+     2.7  Bigger, blue due dates
+     2.8  "Sort by" label + color-coded sort options
      ═══════════════════════════════════════════════ */
-  const APP_VERSION = "2.3";
+  const APP_VERSION = "2.8";
 
   const STORE_KEY = "billcheck-state-v1";
   const fmt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
@@ -530,6 +567,7 @@
     month: monthName(),
     dark: window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches,
     celebrated: false,
+    sortBy: "date",
     history: [],
     balances: { checking: 0, credit: 4000, savings: 0 },
     items: [
@@ -574,6 +612,7 @@
         const parsed = JSON.parse(raw);
         if (parsed && Array.isArray(parsed.items)) state = parsed;
         if (!Array.isArray(state.history)) state.history = [];
+        if (!state.sortBy) state.sortBy = "date";
         // Backfill: flag existing "Credit Card Payment" rows saved by older versions
         state.items.forEach(i => {
           if (i.creditCard === undefined && i.type === "Expense" && /credit\s*card/i.test(i.name)) i.creditCard = true;
@@ -675,10 +714,17 @@
       saveState();
     }
 
-    renderList("incomeList", income, true);
-    // Bills sort by due day — earliest first, undated ones at the bottom
-    const billsSorted = [...bills].sort((a, b) => (a.due || 99) - (b.due || 99));
-    renderList("expenseList", billsSorted, false);
+    // Sort both lists by the chosen order
+    const sortItems = (arr) => {
+      const c = [...arr];
+      if (state.sortBy === "name") c.sort((a, b) => a.name.localeCompare(b.name));
+      else if (state.sortBy === "amount") c.sort((a, b) => b.amount - a.amount);
+      else c.sort((a, b) => (a.due || 99) - (b.due || 99)); // date: earliest first, undated last
+      return c;
+    };
+    renderList("incomeList", sortItems(income), true);
+    renderList("expenseList", sortItems(bills), false);
+    [...$("sortSeg").children].forEach(b => b.classList.toggle("active", b.dataset.sort === (state.sortBy || "date")));
     renderMonths();
   }
 
@@ -867,12 +913,15 @@
       row.innerHTML =
         '<div class="checkbox">' + checkSVG + '</div>' +
         '<div class="info"><div class="name"></div>' + (sub ? '<div class="note"></div>' : '') + '</div>' +
-        (isIncome ? '' : '<div class="due-col"></div>') +
+        '<div class="due-col"></div>' +
         '<div class="amt ' + (isIncome ? "income" : "") + '"></div>' +
         '<div class="edit-dot" role="button" aria-label="Edit">···</div>';
       row.querySelector(".name").textContent = item.name;
       if (sub) row.querySelector(".note").textContent = sub;
-      if (!isIncome) row.querySelector(".due-col").textContent = item.due ? ordinal(item.due) : "";
+      const dueCol = row.querySelector(".due-col");
+      dueCol.textContent = item.due ? ordinal(item.due) : "+";
+      dueCol.classList.toggle("add", !item.due);
+      dueCol.addEventListener("click", (e) => { e.stopPropagation(); openDueSheet(item.id); });
       row.querySelector(".amt").textContent = (isIncome ? "+" : "−") + money(item.amount).replace("$", "$");
       row.addEventListener("click", (e) => {
         if (e.target.closest(".edit-dot")) { openItemSheet(item.id); return; }
@@ -969,9 +1018,10 @@
     sheetMode = { kind: "item", id };
     $("sheetTitle").textContent = "Edit " + (item.type === "Income" ? "income" : "bill");
     $("fieldName").style.display = "";
+    $("fieldAmt").style.display = "";
     $("fieldNote").style.display = "";
     $("fieldCC").style.display = item.type === "Expense" ? "" : "none";
-    $("fieldDue").style.display = item.type === "Expense" ? "" : "none";
+    $("fieldDue").style.display = "";
     setSelDue(item.due || null);
     $("inpCC").checked = !!item.creditCard;
     $("lblAmt").textContent = "Amount";
@@ -986,9 +1036,10 @@
     sheetMode = { kind: "new", type };
     $("sheetTitle").textContent = type === "Income" ? "Add income" : "Add bill";
     $("fieldName").style.display = "";
+    $("fieldAmt").style.display = "";
     $("fieldNote").style.display = "";
     $("fieldCC").style.display = type === "Expense" ? "" : "none";
-    $("fieldDue").style.display = type === "Expense" ? "" : "none";
+    $("fieldDue").style.display = "";
     setSelDue(null);
     $("inpCC").checked = false;
     $("lblAmt").textContent = "Amount";
@@ -1000,11 +1051,27 @@
     setTimeout(() => $("inpName").focus(), 320);
   }
 
+  function openDueSheet(id) {
+    const item = state.items.find(i => i.id === id);
+    if (!item) return;
+    sheetMode = { kind: "due", id };
+    $("sheetTitle").textContent = item.name + " — day of month";
+    $("fieldName").style.display = "none";
+    $("fieldAmt").style.display = "none";
+    $("fieldNote").style.display = "none";
+    $("fieldCC").style.display = "none";
+    $("fieldDue").style.display = "";
+    setSelDue(item.due || null);
+    $("btnDelete").style.display = "none";
+    showSheet();
+  }
+
   const balLabels = { checking: "Checking balance", credit: "Credit card balance", savings: "Savings balance" };
   function openBalSheet(key) {
     sheetMode = { kind: "bal", key };
     $("sheetTitle").textContent = balLabels[key];
     $("fieldName").style.display = "none";
+    $("fieldAmt").style.display = "";
     $("fieldNote").style.display = "none";
     $("fieldCC").style.display = "none";
     $("fieldDue").style.display = "none";
@@ -1031,10 +1098,8 @@
         item.name = $("inpName").value.trim() || item.name;
         item.amount = parseAmt($("inpAmt").value);
         item.note = $("inpNote").value.trim();
-        if (item.type === "Expense") {
-          item.creditCard = $("inpCC").checked;
-          item.due = selDue;
-        }
+        if (item.type === "Expense") item.creditCard = $("inpCC").checked;
+        item.due = selDue;
         // Keep the Credit Card balance consistent if this item is already checked
         if (item.done) {
           if (wasCC) state.balances.credit = r2(state.balances.credit + oldApplied); // undo old deduction
@@ -1046,15 +1111,19 @@
           }
         }
       }
+    } else if (sheetMode.kind === "due") {
+      const item = state.items.find(i => i.id === sheetMode.id);
+      if (item) item.due = selDue;
     } else if (sheetMode.kind === "new") {
       const name = $("inpName").value.trim();
+      if (!name) { alert("Please give it a name first — or if you only wanted to set a date on an existing bill, close this and tap the date spot on its row."); return; }
       if (name) {
         state.items.push({
           id: uid(), type: sheetMode.type, name,
           amount: parseAmt($("inpAmt").value), done: false,
           note: $("inpNote").value.trim(),
           creditCard: sheetMode.type === "Expense" && $("inpCC").checked,
-          due: sheetMode.type === "Expense" ? selDue : null
+          due: selDue
         });
       }
     } else if (sheetMode.kind === "bal") {
@@ -1153,6 +1222,13 @@
 
   document.querySelectorAll(".add-link").forEach(btn => {
     btn.addEventListener("click", () => openNewSheet(btn.dataset.add));
+  });
+
+  [...$("sortSeg").children].forEach(btn => {
+    btn.addEventListener("click", () => {
+      state.sortBy = btn.dataset.sort;
+      saveState(); render();
+    });
   });
 
   document.querySelectorAll(".bal").forEach(el => {
