@@ -166,6 +166,12 @@
   .row.done .name { color: var(--text3); text-decoration: line-through; text-decoration-color: var(--text3); }
   .row .note { font-size: 12px; color: var(--text2); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .row .amt { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.3px; }
+  .row .due-col {
+    width: 42px; flex-shrink: 0; text-align: right;
+    font-size: 13px; font-weight: 600; color: var(--text2);
+    font-variant-numeric: tabular-nums;
+  }
+  .row.done .due-col { color: var(--text3); }
   .row.done .amt { color: var(--text3); }
   .row .amt.income { color: var(--green); }
   .row.done .amt.income { color: var(--text3); }
@@ -221,6 +227,22 @@
   }
   body.dark .cc-row { background: #2C2C2E; }
   .cc-row input { width: 20px; height: 20px; accent-color: var(--green); flex-shrink: 0; }
+  .day-grid {
+    display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px;
+  }
+  .day-btn {
+    aspect-ratio: 1; border: none; border-radius: 10px; cursor: pointer;
+    background: var(--card2); color: var(--text);
+    font-family: inherit; font-size: 14px; font-weight: 500;
+    transition: transform 0.08s;
+  }
+  body.dark .day-btn { background: #2C2C2E; }
+  .day-btn:active { transform: scale(0.92); }
+  .day-btn.sel { background: var(--blue); color: #fff; font-weight: 700; }
+  .day-clear {
+    background: none; border: none; color: var(--blue); cursor: pointer;
+    font-family: inherit; font-size: 13px; font-weight: 600; padding: 6px 0 0; 
+  }
   .sheet-btns { display: flex; gap: 10px; margin-top: 6px; }
   .btn {
     flex: 1; border: none; border-radius: 13px; padding: 14px;
@@ -452,6 +474,11 @@
     <label for="inpAmt" id="lblAmt">Amount</label>
     <input id="inpAmt" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off">
   </div>
+  <div class="field" id="fieldDue">
+    <label>Due day of month (optional) — tap to pick</label>
+    <div class="day-grid" id="dayGrid"></div>
+    <button class="day-clear" id="dayClear" type="button">No due date</button>
+  </div>
   <div class="field" id="fieldNote">
     <label for="inpNote">Note (optional)</label>
     <input id="inpNote" type="text" placeholder="e.g. due on the 15th" autocomplete="off">
@@ -483,8 +510,10 @@
      1.9  $0 bills optional; "Complete This Month"; auto-advance after balloons
      2.0  Fixed footer/version hidden behind tab bar
      2.1  Restore a past month from the Months page
+     2.2  Due dates on bills, sorted start to end of month
+     2.3  Due date column + tap-to-pick calendar grid
      ═══════════════════════════════════════════════ */
-  const APP_VERSION = "2.1";
+  const APP_VERSION = "2.3";
 
   const STORE_KEY = "billcheck-state-v1";
   const fmt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
@@ -647,7 +676,9 @@
     }
 
     renderList("incomeList", income, true);
-    renderList("expenseList", bills, false);
+    // Bills sort by due day — earliest first, undated ones at the bottom
+    const billsSorted = [...bills].sort((a, b) => (a.due || 99) - (b.due || 99));
+    renderList("expenseList", billsSorted, false);
     renderMonths();
   }
 
@@ -824,6 +855,10 @@
       return;
     }
     items.forEach(item => {
+      const ordinal = (n) => {
+        const s = ["th", "st", "nd", "rd"], v = n % 100;
+        return n + (s[(v - 20) % 10] || s[v] || s[0]);
+      };
       const sub = item.note
         || (item.creditCard ? "Pays down Credit Card balance" : "")
         || (item.type === "Expense" && item.amount === 0 ? "Optional — no amount this month" : "");
@@ -832,10 +867,12 @@
       row.innerHTML =
         '<div class="checkbox">' + checkSVG + '</div>' +
         '<div class="info"><div class="name"></div>' + (sub ? '<div class="note"></div>' : '') + '</div>' +
+        (isIncome ? '' : '<div class="due-col"></div>') +
         '<div class="amt ' + (isIncome ? "income" : "") + '"></div>' +
         '<div class="edit-dot" role="button" aria-label="Edit">···</div>';
       row.querySelector(".name").textContent = item.name;
       if (sub) row.querySelector(".note").textContent = sub;
+      if (!isIncome) row.querySelector(".due-col").textContent = item.due ? ordinal(item.due) : "";
       row.querySelector(".amt").textContent = (isIncome ? "+" : "−") + money(item.amount).replace("$", "$");
       row.addEventListener("click", (e) => {
         if (e.target.closest(".edit-dot")) { openItemSheet(item.id); return; }
@@ -906,6 +943,22 @@
 
   /* ── Edit sheet ── */
   let sheetMode = null; // {kind:'item', id} | {kind:'new', type} | {kind:'bal', key}
+  let selDue = null;    // selected due day in the calendar grid
+
+  function buildDayGrid() {
+    const g = $("dayGrid");
+    for (let d = 1; d <= 31; d++) {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "day-btn"; b.textContent = d;
+      b.addEventListener("click", () => setSelDue(selDue === d ? null : d));
+      g.appendChild(b);
+    }
+    $("dayClear").addEventListener("click", () => setSelDue(null));
+  }
+  function setSelDue(d) {
+    selDue = d;
+    [...$("dayGrid").children].forEach((b, i) => b.classList.toggle("sel", i + 1 === d));
+  }
 
   function showSheet() { $("overlay").classList.add("show"); $("sheet").classList.add("show"); }
   function hideSheet() { $("overlay").classList.remove("show"); $("sheet").classList.remove("show"); sheetMode = null; }
@@ -918,6 +971,8 @@
     $("fieldName").style.display = "";
     $("fieldNote").style.display = "";
     $("fieldCC").style.display = item.type === "Expense" ? "" : "none";
+    $("fieldDue").style.display = item.type === "Expense" ? "" : "none";
+    setSelDue(item.due || null);
     $("inpCC").checked = !!item.creditCard;
     $("lblAmt").textContent = "Amount";
     $("inpName").value = item.name;
@@ -933,6 +988,8 @@
     $("fieldName").style.display = "";
     $("fieldNote").style.display = "";
     $("fieldCC").style.display = type === "Expense" ? "" : "none";
+    $("fieldDue").style.display = type === "Expense" ? "" : "none";
+    setSelDue(null);
     $("inpCC").checked = false;
     $("lblAmt").textContent = "Amount";
     $("inpName").value = "";
@@ -950,6 +1007,7 @@
     $("fieldName").style.display = "none";
     $("fieldNote").style.display = "none";
     $("fieldCC").style.display = "none";
+    $("fieldDue").style.display = "none";
     $("lblAmt").textContent = "Balance";
     $("inpAmt").value = state.balances[key] ? String(state.balances[key]) : "";
     $("btnDelete").style.display = "none";
@@ -973,7 +1031,10 @@
         item.name = $("inpName").value.trim() || item.name;
         item.amount = parseAmt($("inpAmt").value);
         item.note = $("inpNote").value.trim();
-        if (item.type === "Expense") item.creditCard = $("inpCC").checked;
+        if (item.type === "Expense") {
+          item.creditCard = $("inpCC").checked;
+          item.due = selDue;
+        }
         // Keep the Credit Card balance consistent if this item is already checked
         if (item.done) {
           if (wasCC) state.balances.credit = r2(state.balances.credit + oldApplied); // undo old deduction
@@ -992,7 +1053,8 @@
           id: uid(), type: sheetMode.type, name,
           amount: parseAmt($("inpAmt").value), done: false,
           note: $("inpNote").value.trim(),
-          creditCard: sheetMode.type === "Expense" && $("inpCC").checked
+          creditCard: sheetMode.type === "Expense" && $("inpCC").checked,
+          due: sheetMode.type === "Expense" ? selDue : null
         });
       }
     } else if (sheetMode.kind === "bal") {
@@ -1100,6 +1162,7 @@
   /* ── Boot ── */
   (async function init() {
     $("verLabel").textContent = "Version " + APP_VERSION;
+    buildDayGrid();
     await loadState();
     render();
   })();
